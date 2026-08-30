@@ -30,6 +30,16 @@ def load(path: Path | None = None) -> Config:
         raise SystemExit(
             f"No config at {p}. Copy config.example.toml to config.toml and edit it."
         )
+    if p.is_dir():
+        # A bind mount to a path that didn't exist on the host makes Docker
+        # create it as an empty directory — so the file the container expects is
+        # a dir and tomllib chokes. Say what actually happened, not IsADirectory.
+        raise SystemExit(
+            f"{p} is a directory, not a file. This usually means a Docker bind "
+            f"mount pointed at a host path that didn't exist yet, so Docker "
+            f"created it as a directory. Remove it and put the real config file "
+            f"there before starting the container."
+        )
     with p.open("rb") as f:
         raw = tomllib.load(f)
 
