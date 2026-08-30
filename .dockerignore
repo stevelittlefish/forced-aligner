@@ -1,0 +1,24 @@
+# Keep the build context small and reproducible. The Dockerfile only copies
+# requirements.txt, app/, and config.example.toml anyway — this stops a fat local
+# tree (venv, model cache, git) from being shipped to the daemon.
+.git
+.gitignore
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+
+# Local, host-specific, or secret-ish — never bake into the image. config.toml is
+# mounted at run time (it may hold an auth_token); the example is copied instead.
+config.toml
+models/
+*.wav
+
+# Not needed at runtime.
+tests/
+docs/
+requirements-dev.txt
+*.md
+LICENSE

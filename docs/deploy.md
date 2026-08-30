@@ -36,6 +36,21 @@ Persist that cache across restarts or every restart re-downloads:
 
 ## Run
 
+The base image is `nvidia/cuda:...ubuntu22.04`. Ubuntu 22.04 ships Python 3.10,
+so the Dockerfile pulls **3.11 from the deadsnakes PPA** (we need 3.11+ for
+stdlib `tomllib`) and points `python`/`pip` at it — don't "simplify" that back to
+`apt-get install python3.11`, which fails on jammy.
+
+Easiest is compose (GPU reservation, mounts and port are all wired in it):
+
+```sh
+cp config.example.toml config.toml    # edit device/port/auth first
+docker compose up -d --build
+docker compose logs -f                # first /align downloads the model (slow)
+```
+
+Or the raw equivalent:
+
 ```sh
 docker build -t forced-aligner .
 docker run --gpus all \
@@ -44,6 +59,12 @@ docker run --gpus all \
   -v aligner-models:/models \
   forced-aligner
 ```
+
+The image `EXPOSE`s and the published port is **8830**; the app binds whatever
+`[server].port` says in the mounted `config.toml`. Keep them equal (or change
+both) or the container will listen on a port nothing is mapped to. The image has
+a `HEALTHCHECK` hitting `/health`, so `docker ps` shows healthy/unhealthy once
+it's up.
 
 Then from another LAN host:
 

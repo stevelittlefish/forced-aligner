@@ -1,0 +1,33 @@
+# One-command run of the aligner on the AI server. Equivalent to the `docker run`
+# in docs/deploy.md, but the GPU reservation, volume wiring, and port live here.
+#
+#   docker compose up -d --build      # start
+#   docker compose logs -f            # first /align downloads the model (slow)
+#   docker compose down               # stop
+#
+# Needs the NVIDIA Container Toolkit on the host (same requirement as `--gpus all`).
+
+services:
+  aligner:
+    build: .
+    image: forced-aligner
+    ports:
+      - "8830:8830"
+    volumes:
+      # config.toml is the ONLY configuration source (no env vars). Keep
+      # [server].port = 8830 in it so it matches the published port above.
+      - ./config.toml:/app/config.toml:ro
+      # Persist the Hugging Face model cache so each language downloads once.
+      # Point [align].model_cache_dir at /models in config.toml to use it.
+      - aligner-models:/models
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  aligner-models:
