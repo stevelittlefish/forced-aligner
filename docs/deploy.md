@@ -41,10 +41,17 @@ so the Dockerfile pulls **3.11 from the deadsnakes PPA** (we need 3.11+ for
 stdlib `tomllib`) and points `python`/`pip` at it — don't "simplify" that back to
 `apt-get install python3.11`, which fails on jammy.
 
+Host state lives under `/srv/forced-aligner` — the config bind-mount and the
+model cache both come from there. Create it once and drop the config in:
+
+```sh
+sudo mkdir -p /srv/forced-aligner/models
+sudo cp config.example.toml /srv/forced-aligner/config.toml   # then edit it
+```
+
 Easiest is compose (GPU reservation, mounts and port are all wired in it):
 
 ```sh
-cp config.example.toml config.toml    # edit device/port/auth first
 docker compose up -d --build
 docker compose logs -f                # first /align downloads the model (slow)
 ```
@@ -53,10 +60,10 @@ Or the raw equivalent:
 
 ```sh
 docker build -t forced-aligner .
-docker run --gpus all \
+docker run --gpus '"device=0"' \
   -p 8830:8830 \
-  -v "$PWD/config.toml:/app/config.toml:ro" \
-  -v aligner-models:/models \
+  -v /srv/forced-aligner/config.toml:/app/config.toml:ro \
+  -v /srv/forced-aligner/models:/models \
   forced-aligner
 ```
 

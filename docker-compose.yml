@@ -14,12 +14,15 @@ services:
     ports:
       - "8830:8830"
     volumes:
+      # Host state lives under /srv/forced-aligner (create it before first run:
+      # `sudo mkdir -p /srv/forced-aligner/models` and drop config.toml there).
+      #
       # config.toml is the ONLY configuration source (no env vars). Keep
       # [server].port = 8830 in it so it matches the published port above.
-      - ./config.toml:/app/config.toml:ro
+      - /srv/forced-aligner/config.toml:/app/config.toml:ro
       # Persist the Hugging Face model cache so each language downloads once.
       # Point [align].model_cache_dir at /models in config.toml to use it.
-      - aligner-models:/models
+      - /srv/forced-aligner/models:/models
     restart: unless-stopped
     deploy:
       resources:
@@ -30,6 +33,3 @@ services:
             - driver: nvidia
               device_ids: ["0"]
               capabilities: [gpu]
-
-volumes:
-  aligner-models:
