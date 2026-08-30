@@ -1,0 +1,14 @@
+# Local config (copy of config.example.toml)
+config.toml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ruff_cache/
+.pytest_cache/
+
+# Model cache / scratch audio if placed in-tree
+models/
+*.wav

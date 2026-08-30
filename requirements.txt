@@ -1,0 +1,14 @@
+# The real dependencies. WhisperX pulls in torch + the wav2vec2 stack; that is
+# the whole job of this service, so it justifies itself.
+#
+# torch is intentionally NOT pinned here: install the build that matches the
+# host's CUDA (see docs/deploy.md) before/with this file, e.g.
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+#
+whisperx>=3.1
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9   # FastAPI multipart form parsing
+numpy>=1.24
+
+# Config uses stdlib tomllib (Python 3.11+) — no dependency for it.

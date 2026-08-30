@@ -1,0 +1,29 @@
+# forced-aligner configuration. Copy to config.toml and edit.
+# No environment variables — this file is the only configuration source.
+
+[server]
+host = "0.0.0.0"
+port = 8830
+
+# Optional bearer token. Empty means no auth (the LAN default, like Demucs).
+# If set, requests must send `Authorization: Bearer <token>`.
+auth_token = ""
+
+[align]
+# "cuda" on the AI server, "cpu" for smoke tests on a laptop.
+device = "cuda"
+
+# wav2vec2 compute type: "float16" on GPU, "int8" or "float32" on CPU.
+compute_type = "float16"
+
+# Language used when a request omits `language`. This service cannot detect
+# language from audio alone (that needs transcription), so the caller should
+# normally send it; this is only the fallback.
+default_language = "en"
+
+# Where Hugging Face caches downloaded models. Persist this across container
+# restarts so models download once. Empty = HF default (~/.cache/huggingface).
+model_cache_dir = ""
+
+# Trim silence/instrumental lead-in before aligning. Almost always wanted.
+vad_trim = true
