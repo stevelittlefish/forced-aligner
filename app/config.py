@@ -22,6 +22,9 @@ class Config:
     default_language: str
     model_cache_dir: str
     vad_trim: bool
+    # Languages to load at startup instead of lazily on first request, so the
+    # first /align isn't slow. A tuple because Config is frozen/hashable.
+    preload_languages: tuple[str, ...]
 
 
 def load(path: Path | None = None) -> Config:
@@ -54,4 +57,5 @@ def load(path: Path | None = None) -> Config:
         default_language=align.get("default_language", "en"),
         model_cache_dir=align.get("model_cache_dir", ""),
         vad_trim=bool(align.get("vad_trim", True)),
+        preload_languages=tuple(align.get("preload_languages", ["en"])),
     )

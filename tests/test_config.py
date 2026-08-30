@@ -35,3 +35,16 @@ def test_load_reads_values(tmp_path):
     assert cfg.device == "cpu"
     assert cfg.vad_trim is False
     assert cfg.default_language == "en"  # default when omitted
+    assert cfg.preload_languages == ("en",)  # defaults to warming English
+
+
+def test_preload_languages_parsed_as_tuple(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[align]\npreload_languages = ["en", "de"]\n')
+    assert config.load(p).preload_languages == ("en", "de")
+
+
+def test_preload_can_be_disabled(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text("[align]\npreload_languages = []\n")
+    assert config.load(p).preload_languages == ()

@@ -35,6 +35,28 @@ def _fake_result():
     )
 
 
+def test_startup_preloads_configured_languages(make_app, monkeypatch):
+    main = make_app(preload_languages=("en", "de"))
+    warmed = []
+    monkeypatch.setattr(main.aligner, "preload", lambda lang: warmed.append(lang))
+    # Lifespan startup only runs when TestClient is used as a context manager.
+    with TestClient(main.app):
+        pass
+    assert warmed == ["en", "de"]
+
+
+def test_startup_survives_preload_failure(make_app, monkeypatch):
+    main = make_app(preload_languages=("en",))
+
+    def boom(lang):
+        raise RuntimeError("HF unreachable")
+
+    monkeypatch.setattr(main.aligner, "preload", boom)
+    # A preload failure must not stop the app from coming up.
+    with TestClient(main.app) as c:
+        assert c.get("/health").status_code == 200
+
+
 def test_health(make_app):
     c = _client(make_app())
     r = c.get("/health")

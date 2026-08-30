@@ -27,3 +27,9 @@ model_cache_dir = ""
 
 # Trim silence/instrumental lead-in before aligning. Almost always wanted.
 vad_trim = true
+
+# Languages to load at startup and keep resident, so the first /align isn't slow
+# (it otherwise pays the model download + load on first use). Defaults to ["en"].
+# Set to [] to load everything lazily on first request instead. Note: startup
+# blocks until these are loaded, so the container is "starting" until they're in.
+preload_languages = ["en"]

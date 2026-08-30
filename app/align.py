@@ -83,6 +83,12 @@ class Aligner:
     def loaded_languages(self) -> list[str]:
         return sorted(self._models.keys())
 
+    def preload(self, language: str) -> None:
+        """Load a language's model now and keep it resident, so the first /align
+        for it isn't slow. Just warms the same cache _get_model uses; raises
+        LanguageUnsupported if no model maps to the code."""
+        self._get_model(language)
+
     def _get_model(self, language: str):
         with self._lock:
             if language not in self._models:

@@ -27,6 +27,7 @@ def _cfg(**over) -> _config.Config:
         "default_language": "en",
         "model_cache_dir": "",
         "vad_trim": False,
+        "preload_languages": (),  # never touch the ML stack in tests
     }
     base.update(over)
     return _config.Config(**base)

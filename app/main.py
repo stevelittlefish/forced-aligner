@@ -7,7 +7,9 @@ mirroring how Demucs is called on this LAN.
 from __future__ import annotations
 
 import json
+import logging
 import tempfile
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 
@@ -22,9 +24,29 @@ from .align import (
     supported_languages,
 )
 
+log = logging.getLogger("forced-aligner")
+
 cfg = config.load()
 aligner = Aligner(cfg)
-app = FastAPI(title="forced-aligner", version="0.1.0")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Warm the configured models before serving, so the first /align isn't slow
+    # (default: English). Best-effort: a download/load failure here is logged but
+    # doesn't stop the service — /align will retry lazily and /models shows what
+    # actually loaded, rather than a bad HF fetch killing the container.
+    for lang in cfg.preload_languages:
+        try:
+            log.info("preloading alignment model for %r...", lang)
+            aligner.preload(lang)
+            log.info("preloaded %r", lang)
+        except Exception:
+            log.exception("failed to preload %r; it will load lazily instead", lang)
+    yield
+
+
+app = FastAPI(title="forced-aligner", version="0.1.0", lifespan=lifespan)
 
 
 @app.exception_handler(HTTPException)
