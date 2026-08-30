@@ -21,6 +21,30 @@ class LanguageUnsupported(Exception):
     """No wav2vec2 model maps to the requested language."""
 
 
+class AudioDecodeError(Exception):
+    """The uploaded bytes could not be decoded as audio (bad/unsupported file).
+
+    Separate from a model/alignment failure so the HTTP layer can answer 415
+    (unsupported media) rather than 500 — the spec distinguishes them because a
+    bad upload is the caller's problem, not the service's."""
+
+
+def supported_languages() -> list[str]:
+    """Language codes WhisperX has a default wav2vec2 model for. Used to fill the
+    422 response body so a caller that sent a bad code learns what *is* possible
+    without reading our source. Imported lazily; falls back to [] if the map
+    isn't reachable (old WhisperX), which is honest rather than a lie."""
+    try:
+        from whisperx import alignment as _a
+
+        codes = set()
+        for name in ("DEFAULT_ALIGN_MODELS_TORCH", "DEFAULT_ALIGN_MODELS_HF"):
+            codes.update(getattr(_a, name, {}).keys())
+        return sorted(codes)
+    except Exception:
+        return []
+
+
 @dataclass
 class Word:
     text: str
@@ -79,7 +103,11 @@ class Aligner:
     def align(self, audio_path: str, text: str, language: str) -> AlignResult:
         import whisperx
 
-        audio = whisperx.load_audio(audio_path)  # 16 kHz mono float32
+        try:
+            audio = whisperx.load_audio(audio_path)  # 16 kHz mono float32
+        except Exception as e:
+            # ffmpeg couldn't decode it: not an audio file, or a corrupt one.
+            raise AudioDecodeError(str(e)) from e
         duration = len(audio) / 16000.0
 
         start, end = self._sung_region(audio, duration)

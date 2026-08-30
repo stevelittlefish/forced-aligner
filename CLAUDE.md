@@ -59,10 +59,12 @@ that file is the reference.
 ## Checks before committing
 
 ```sh
-ruff check . && python -m compileall app
+ruff check . && python -m compileall app && pytest -q
 ```
 
-If tests exist: `pytest -q`. A chunk that fails its checks is not finished.
+Tests exist now (`tests/`, no GPU/ML stack needed — the aligner is mocked).
+Install them with `pip install -r requirements-dev.txt`. A chunk that fails its
+checks is not finished.
 
 ## Honesty about singing
 

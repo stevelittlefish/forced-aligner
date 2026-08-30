@@ -11,15 +11,29 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from . import config
-from .align import Aligner, LanguageUnsupported
+from .align import (
+    Aligner,
+    AudioDecodeError,
+    LanguageUnsupported,
+    supported_languages,
+)
 
 cfg = config.load()
 aligner = Aligner(cfg)
 app = FastAPI(title="forced-aligner", version="0.1.0")
+
+
+@app.exception_handler(HTTPException)
+async def _http_error(_: Request, exc: HTTPException) -> JSONResponse:
+    # The spec's error bodies are {"error": ...} (plus "supported" on 422), not
+    # FastAPI's default {"detail": ...}. A dict detail is already in that shape
+    # and passes through; a string detail gets wrapped.
+    body = exc.detail if isinstance(exc.detail, dict) else {"error": exc.detail}
+    return JSONResponse(status_code=exc.status_code, content=body)
 
 
 def _check_auth(authorization: str | None) -> None:
@@ -59,7 +73,9 @@ async def align(
     try:
         p = json.loads(params)
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"params is not valid JSON: {e}")
+        raise HTTPException(
+            status_code=400, detail=f"params is not valid JSON: {e}"
+        ) from e
 
     text = (p.get("text") or "").strip()
     if not text:
@@ -80,10 +96,19 @@ async def align(
         except LanguageUnsupported as e:
             raise HTTPException(
                 status_code=422,
-                detail={"error": f"unsupported language {language!r}: {e}"},
-            )
-        except Exception as e:  # decode failures, model/alignment errors
-            raise HTTPException(status_code=500, detail=f"alignment failed: {e}")
+                detail={
+                    "error": f"unsupported language {language!r}: {e}",
+                    "supported": supported_languages(),
+                },
+            ) from e
+        except AudioDecodeError as e:
+            raise HTTPException(
+                status_code=415, detail=f"audio could not be decoded: {e}"
+            ) from e
+        except Exception as e:  # model load or alignment failure
+            raise HTTPException(
+                status_code=500, detail=f"alignment failed: {e}"
+            ) from e
 
     return JSONResponse(
         {

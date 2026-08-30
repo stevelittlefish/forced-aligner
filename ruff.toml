@@ -1,0 +1,13 @@
+# Pin the lint ruleset so `ruff check .` means the same thing everywhere, rather
+# than inheriting whatever an ambient ruff defaults to. A conventional, useful
+# set: pyflakes/pycodestyle errors, import sorting, bugbear, pyupgrade,
+# comprehensions, and a few simplifications.
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "I", "B", "UP", "C4", "SIM"]
+
+# B008: calling File()/Form()/Header()/Depends() in argument defaults is *the*
+# FastAPI idiom, not a bug. Excluding it is why this project can keep idiomatic
+# route signatures.
+ignore = ["B008"]
