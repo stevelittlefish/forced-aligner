@@ -126,18 +126,50 @@ class Aligner:
         # One segment spanning the sung region: the aligner sees all the words
         # and all the audio at once and places them monotonically.
         segments = [{"text": flat, "start": start, "end": end}]
-        result = whisperx.align(
-            segments,
-            model,
-            metadata,
-            audio,
-            self.cfg.device,
-            return_char_alignments=False,
-        )
+        result = None
+        try:
+            result = whisperx.align(
+                segments,
+                model,
+                metadata,
+                audio,
+                self.cfg.device,
+                return_char_alignments=False,
+            )
 
-        aligned = _collect_words(result)
-        lines = _map_words_to_lines(lines_text, aligned)
-        return AlignResult(language=language, duration=duration, lines=lines)
+            aligned = _collect_words(result)
+            lines = _map_words_to_lines(lines_text, aligned)
+            return AlignResult(language=language, duration=duration, lines=lines)
+        finally:
+            # A long song spikes wav2vec2 activations into several GB, and
+            # PyTorch's caching allocator keeps that reserved after the job. This
+            # GPU is shared with Demucs and Stable Audio, and the reserved pool
+            # is not visible to those separate processes — so after aligning a
+            # ~10 min track the aligner sat at ~9.9 GB and the next Demucs run
+            # OOM'd on a full card. Drop this job's big tensors and hand the
+            # cache back to the driver, where the co-tenants can claim it. The
+            # per-language model cache (self._models) is untouched — only the
+            # audio and alignment tensors go, so the next /align is still warm.
+            del audio, segments, result
+            self._release_vram()
+
+    def _release_vram(self) -> None:
+        """Return the caching allocator's free blocks to the CUDA driver so other
+        processes on the shared GPU can use them. A no-op off CUDA. empty_cache()
+        only releases already-freed cache, so the del above must happen first."""
+        if not str(self.cfg.device).startswith("cuda"):
+            return
+        import gc
+
+        gc.collect()
+        try:
+            import torch
+
+            torch.cuda.empty_cache()
+        except Exception:
+            # Freeing cache is best-effort housekeeping; never fail a good align
+            # because the release hiccuped.
+            pass
 
     def _sung_region(self, audio, duration: float) -> tuple[float, float]:
         """Where singing actually is. A cheap energy-threshold VAD is enough for
