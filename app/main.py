@@ -156,9 +156,24 @@ def info() -> dict:
         "default_language": cfg.default_language,
         "max_loaded_languages": 1,
         "capabilities": ["align"],
-        "eviction": "stop",
+        "eviction": "park",
+        "parked": aligner.is_parked(),
         "vram": aligner.vram_stats(),
     }
+
+
+@app.post("/park")
+async def park() -> dict:
+    # ASS's eviction control plane. No auth: like /health and /v1/info these are
+    # node-local orchestration calls, and ASS's park client sends no bearer. The
+    # move is blocking GPU work, so keep it off the event loop. ASS only parks a
+    # backend with no in-flight jobs, so this never races a running align.
+    return await asyncio.to_thread(aligner.park)
+
+
+@app.post("/unpark")
+async def unpark() -> dict:
+    return await asyncio.to_thread(aligner.unpark)
 
 
 @app.post("/v1/align", status_code=202)

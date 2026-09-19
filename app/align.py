@@ -78,10 +78,57 @@ class Aligner:
         self.cfg = cfg
         self._models: dict[str, tuple] = {}  # language -> (model, metadata)
         self._lock = Lock()
+        # Parked = weights shoved to CPU RAM, GPU freed, process still alive. ASS
+        # flips this via /park and /unpark; we only track it so a stray job that
+        # arrives before ASS unparks doesn't try to run on a CPU-resident model.
+        self._parked = False
 
     def loaded_languages(self) -> list[str]:
         with self._lock:
             return sorted(self._models.keys())
+
+    def is_parked(self) -> bool:
+        with self._lock:
+            return self._parked
+
+    def park(self) -> dict:
+        """Move every resident model off the GPU into CPU RAM and hand the CUDA
+        cache back to the driver, so ASS can give the card to another backend
+        without making us cold-start later. The process and the loaded weights
+        stay alive — only their device changes — so unpark is a cheap PCIe copy
+        back, not a reload. A no-op (and honest about it) when we're not on CUDA
+        or nothing is loaded."""
+        with self._lock:
+            if not str(self.cfg.device).startswith("cuda"):
+                return {"parked": False, "device": str(self.cfg.device),
+                        "reason": "not on CUDA; nothing to move"}
+            for model, _metadata in self._models.values():
+                model.to("cpu")
+            self._parked = True
+            # empty_cache() only frees already-freed blocks, so the .to('cpu')
+            # above (which frees the GPU copies) has to happen first.
+            self._release_vram()
+            return {"parked": True, "device": str(self.cfg.device),
+                    "languages": sorted(self._models.keys())}
+
+    def unpark(self) -> dict:
+        """Bring the parked models back onto the GPU. ASS calls this before it
+        forwards the next job; after it returns the model is resident again."""
+        with self._lock:
+            if not str(self.cfg.device).startswith("cuda"):
+                return {"unparked": False, "device": str(self.cfg.device),
+                        "reason": "not on CUDA; nothing to move"}
+            self._restore_device_locked()
+            return {"unparked": True, "device": str(self.cfg.device),
+                    "languages": sorted(self._models.keys())}
+
+    def _restore_device_locked(self) -> None:
+        """Move resident models back to the configured CUDA device and clear the
+        parked flag. Caller holds self._lock."""
+        if self._parked:
+            for model, _metadata in self._models.values():
+                model.to(self.cfg.device)
+            self._parked = False
 
     def preload(self, language: str) -> None:
         """Load a language's model now and keep it resident, so the first job
@@ -108,6 +155,11 @@ class Aligner:
                     # WhisperX raises when no model maps to the language code.
                     raise LanguageUnsupported(str(e)) from e
                 self._models[language] = (model, metadata)
+            # ASS is meant to unpark before sending work, but never run inference
+            # against a model still sitting on the CPU if a request slips through:
+            # bring it home first. (A freshly loaded model is already on-device,
+            # so this only bites the already-resident-but-parked case.)
+            self._restore_device_locked()
             return self._models[language]
 
     def align(self, audio_path: str, text: str, language: str) -> AlignResult:

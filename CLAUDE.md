@@ -36,8 +36,10 @@ the fix on top and say what it fixes. Once it's in, it stays in.
   and `/v1/info`. Synchronous `/align` is restored for standalone callers;
   it shares the job worker and limits, but returns JSON directly and cleans up
   its scratch files. `/models` remains replaced by `/v1/info`.
-  Use one serial inference worker and one resident language model. ASS stops
-  the container for eviction; no park/unpark endpoints yet.
+  Use one serial inference worker and one resident language model. `/park` and
+  `/unpark` are implemented (move the resident model to CPU RAM and back, freeing
+  the GPU), so ASS can evict with `park` and skip our cold start. Stop eviction
+  still works for backends configured that way.
 - **Multipart in, asynchronous jobs out.** Save timings as `alignment.json`;
   ASS harvests it before removing the container. No automatic result expiry.
 - The image supplies TOML defaults. HF/torch cache environment variables are

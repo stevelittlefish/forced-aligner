@@ -12,6 +12,8 @@ Unresolved words keep `null` timestamps so callers can flag them for correction.
   `language`); returns HTTP 202 with `{job_id, state: "queued", artifacts: []}`.
 - `GET /v1/jobs/{id}` — queued/running/succeeded/failed, error and artifacts.
 - `GET /v1/jobs/{id}/result/alignment.json` — the completed timing document.
+- `POST /park` / `POST /unpark` — ASS eviction: move the resident model to CPU
+  RAM (freeing the GPU) and back. No-ops off CUDA.
 
 Standalone clients can use synchronous `POST /align` with the same multipart
 fields and receive the timing JSON directly (HTTP 200). It waits its turn on the
@@ -27,8 +29,9 @@ One serial inference worker keeps HTTP responsive and prevents overlapping GPU
 jobs. Only one language model is resident: switching languages unloads the old
 model before loading the new one. Disk caches retain downloaded weights.
 
-ASS uses `evict = "stop"`; there are no park/unpark endpoints. ASS harvests the
-JSON before removing the container. Jobs and artifacts live in the container's
+ASS can use `evict = "park"` (via `/park` + `/unpark`, which shuttle the model
+between the GPU and CPU RAM) or `evict = "stop"`. Either way ASS harvests the
+JSON before removing or parking the container. Jobs and artifacts live in the container's
 scratch directory, with uploads removed after completion or failure. A process
 restart marks interrupted jobs failed; completed results survive while their
 scratch directory exists. There is no result expiry that could race harvesting.

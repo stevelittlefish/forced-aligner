@@ -32,10 +32,25 @@ return 404; downloading before success returns 409.
 
 `GET /health` is ready after configured preloads finish. A preload failure
 aborts startup. `GET /v1/info` reports the loaded language, default language,
-`max_loaded_languages: 1`, `capabilities: ["align"]`, `eviction: "stop"`, and
+`max_loaded_languages: 1`, `capabilities: ["align"]`, `eviction: "park"`,
+`parked: <bool>` (true while the model is parked in CPU RAM), and
 `vram: {cuda, device, allocated_mb, reserved_mb, peak_mb}`. Memory values are
 MiB; peak is PyTorch's process-lifetime peak allocated memory, not total driver
 memory. CPU reports zeros without importing torch.
+
+## Park / unpark (ASS eviction)
+
+`POST /park` moves the resident model to CPU RAM and frees the CUDA cache back to
+the driver, so ASS can hand the GPU to another backend without making us
+cold-start later. `POST /unpark` moves it back onto the GPU. Both return a small
+JSON summary (`{parked|unparked, device, languages}`) and are unauthenticated
+node-local control calls, like `/health` and `/v1/info`. Off CUDA they are
+honest no-ops (`parked: false`). The process and the loaded weights stay alive
+across a park, so unpark is a PCIe copy, not a model reload.
+
+ASS only parks a backend with no in-flight jobs, so park never races a running
+align. As a belt-and-braces guard, a job that somehow arrives while parked
+brings the model back on-device before inference rather than running on CPU.
 
 If `server.auth_token` is set, submission, polling and artifact download require
 its Bearer token. Leave it empty for ASS: ASS does not forward backend auth.
@@ -59,5 +74,6 @@ Use `/align` when running the service standalone. Through ASS, use its async job
 API so ASS can hold the GPU lease and harvest results before eviction. Do not
 send direct standalone requests to an ASS-managed container.
 
-`/models` is replaced by `/v1/info`. No park/unpark routes are provided; configure stop eviction. Run one uvicorn process (no `--workers`):
-the worker queue and concurrency limit belong to that process.
+`/models` is replaced by `/v1/info`. `/park` and `/unpark` are provided, so ASS
+can use `evict = "park"` (or still `stop`, its choice). Run one uvicorn process
+(no `--workers`): the worker queue and concurrency limit belong to that process.

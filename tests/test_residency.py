@@ -28,6 +28,68 @@ def test_language_switch_releases_previous_model_before_loading(monkeypatch):
     assert aligner.loaded_languages() == ["de"]
 
 
+class FakeModel:
+    """Records every device it's moved to, so a test can prove where it lives."""
+
+    def __init__(self):
+        self.moves: list[str] = []
+
+    def to(self, device):
+        self.moves.append(str(device))
+        return self
+
+
+def _load_fake(aligner, monkeypatch):
+    """Wire up whisperx so preload/_get_model produce FakeModels, no VRAM release."""
+    def load(language_code, **kw):
+        return FakeModel(), {}
+
+    monkeypatch.setitem(sys.modules, "whisperx", SimpleNamespace(load_align_model=load))
+    monkeypatch.setattr(aligner, "_release_vram", lambda: None)
+
+
+def test_park_moves_model_to_cpu_and_unpark_brings_it_back(monkeypatch):
+    aligner = Aligner(_cfg(device="cuda"))
+    _load_fake(aligner, monkeypatch)
+    aligner.preload("en")
+    model = aligner._models["en"][0]
+
+    assert aligner.is_parked() is False
+    res = aligner.park()
+    assert res["parked"] is True and res["languages"] == ["en"]
+    assert aligner.is_parked() is True
+    assert model.moves[-1] == "cpu"
+
+    res = aligner.unpark()
+    assert res["unparked"] is True
+    assert aligner.is_parked() is False
+    assert model.moves[-1] == "cuda"
+
+
+def test_park_is_a_noop_off_cuda(monkeypatch):
+    aligner = Aligner(_cfg(device="cpu"))
+    _load_fake(aligner, monkeypatch)
+    aligner.preload("en")
+    res = aligner.park()
+    assert res["parked"] is False
+    assert aligner.is_parked() is False
+    assert aligner._models["en"][0].moves == []  # never touched
+
+
+def test_get_model_restores_a_parked_model_before_use(monkeypatch):
+    # ASS should unpark first, but a stray request must never run on a CPU model.
+    aligner = Aligner(_cfg(device="cuda"))
+    _load_fake(aligner, monkeypatch)
+    aligner.preload("en")
+    model = aligner._models["en"][0]
+    aligner.park()
+    assert model.moves[-1] == "cpu"
+
+    aligner._get_model("en")  # the call align() makes right before inference
+    assert aligner.is_parked() is False
+    assert model.moves[-1] == "cuda"
+
+
 def test_gpu_telemetry(monkeypatch):
     cuda = SimpleNamespace(
         is_available=lambda: True,

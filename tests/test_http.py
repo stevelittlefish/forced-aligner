@@ -352,3 +352,31 @@ def test_cancelled_sync_wait_keeps_slot_until_worker_cleans_up(make_app, monkeyp
         main.slots.release()
 
     asyncio.run(exercise())
+
+
+def test_info_advertises_park_eviction(make_app):
+    main = make_app()
+    with TestClient(main.app) as client:
+        info = client.get("/v1/info").json()
+        assert info["eviction"] == "park"
+        assert info["parked"] is False
+
+
+def test_park_and_unpark_endpoints_drive_the_aligner(make_app, monkeypatch):
+    main = make_app()
+    calls = []
+
+    def fake_park():
+        calls.append("park")
+        return {"parked": True}
+
+    def fake_unpark():
+        calls.append("unpark")
+        return {"unparked": True}
+
+    monkeypatch.setattr(main.aligner, "park", fake_park)
+    monkeypatch.setattr(main.aligner, "unpark", fake_unpark)
+    with TestClient(main.app) as client:
+        assert client.post("/park").json() == {"parked": True}
+        assert client.post("/unpark").json() == {"unparked": True}
+    assert calls == ["park", "unpark"]
