@@ -61,3 +61,17 @@ measure and adjust both on representative tracks. Only one language is cached.
 For standalone debugging, `docker compose up --build` uses the same cache
 mount. Remove it before letting ASS manage the service. The image's uvicorn CMD
 binds port 8830; changing ports requires overriding CMD as well as ASS config.
+
+## Standalone synchronous request
+
+When running the service independently of ASS, call port 8830 directly:
+
+```sh
+curl -s -F 'audio=@vocals.wav' \
+  -F 'params={"text":"Hello world","language":"en"}' \
+  http://localhost:8830/align
+```
+
+The request waits for its turn and returns timing JSON directly. Set client
+and proxy timeouts long enough for queueing and inference. Both APIs use one
+worker; do not send direct requests to a container whose lifecycle ASS controls.

@@ -41,6 +41,23 @@ If `server.auth_token` is set, submission, polling and artifact download require
 its Bearer token. Leave it empty for ASS: ASS does not forward backend auth.
 Health and info are unauthenticated LAN diagnostics.
 
-The synchronous `/align` and `/models` routes are removed. No park/unpark routes
-are provided; configure stop eviction. Run one uvicorn process (no `--workers`):
+## Synchronous standalone operation
+
+`POST /align` takes the same multipart `audio` and `params`, but waits and returns
+HTTP 200 with the timing document directly. Duration is rounded to three decimal
+places, as in the original endpoint. No job ID or result artifact is retained.
+It shares the single inference worker, queue bound, upload limit and optional
+Bearer authentication with `/v1/align`; HTTP health and polling stay responsive.
+
+Unsupported languages return 422 with `error` and `supported` language codes;
+audio decode errors return 415; inference/load failures return 500. Other
+validation and queue errors match the async route. If a request is cancelled,
+its queued/running work finishes and cleans up its temporary files and slot.
+Clients must allow enough timeout for both queueing and inference.
+
+Use `/align` when running the service standalone. Through ASS, use its async job
+API so ASS can hold the GPU lease and harvest results before eviction. Do not
+send direct standalone requests to an ASS-managed container.
+
+`/models` is replaced by `/v1/info`. No park/unpark routes are provided; configure stop eviction. Run one uvicorn process (no `--workers`):
 the worker queue and concurrency limit belong to that process.

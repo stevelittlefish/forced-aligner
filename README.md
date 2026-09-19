@@ -13,7 +13,11 @@ Unresolved words keep `null` timestamps so callers can flag them for correction.
 - `GET /v1/jobs/{id}` — queued/running/succeeded/failed, error and artifacts.
 - `GET /v1/jobs/{id}/result/alignment.json` — the completed timing document.
 
-The old synchronous `/align` and `/models` endpoints have been removed. Clients
+Standalone clients can use synchronous `POST /align` with the same multipart
+fields and receive the timing JSON directly (HTTP 200). It waits its turn on the
+same serial worker; allow enough client timeout for queueing and inference.
+Scratch files are removed when it finishes, even if the caller stops waiting.
+`/models` remains replaced by `/v1/info`. ASS clients
 should submit to ASS at `/v1/aligner/jobs`, poll `/v1/jobs/{id}`, and download
 `/v1/jobs/{id}/result/alignment.json`. See [the contract](docs/spec.md).
 

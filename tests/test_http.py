@@ -28,9 +28,9 @@ def fake_result():
     )
 
 
-def submit(client, params=None, audio=b"RIFFfake", **kw):
+def submit(client, params=None, audio=b"RIFFfake", path="/v1/align", **kw):
     return client.post(
-        "/v1/align",
+        path,
         files={"audio": ("v.wav", audio, "audio/wav")},
         data={"params": params or json.dumps({"text": "hello world"})},
         **kw,
@@ -174,7 +174,6 @@ def test_upload_limits_cleanup_and_unknown_jobs(make_app, monkeypatch):
         assert client.get("/v1/jobs/unknown").status_code == 404
         assert client.get("/v1/jobs/" + "0" * 32).status_code == 404
         assert submit(client).status_code == 202
-        assert client.post("/align").status_code == 404
         assert client.get("/models").status_code == 404
 
 
@@ -220,3 +219,136 @@ def test_auth_covers_submission_polling_and_download(make_app, monkeypatch):
             submit(client, headers={"Authorization": "Bearer secret"}).status_code
             == 202
         )
+
+
+def test_synchronous_result_and_cleanup(make_app, monkeypatch):
+    main = make_app()
+    result = fake_result()
+    result.duration = 2.51234
+    monkeypatch.setattr(main.aligner, "align", lambda *args: result)
+    with TestClient(main.app) as client:
+        response = submit(client, path="/align")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["duration"] == 2.512
+        assert body["language"] == "en"
+        assert body["lines"][0]["words"][1]["start"] is None
+        assert "job_id" not in body
+        assert list(main.root.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "error, code",
+    [
+        (LanguageUnsupported("unknown language"), 422),
+        (AudioDecodeError("bad audio"), 415),
+        (RuntimeError("out of memory"), 500),
+    ],
+)
+def test_synchronous_errors_and_slot_cleanup(make_app, monkeypatch, error, code):
+    main = make_app(max_pending_jobs=1)
+
+    def boom(*args):
+        raise error
+
+    monkeypatch.setattr(main.aligner, "align", boom)
+    monkeypatch.setattr(main, "supported_languages", lambda: ["en", "de"])
+    with TestClient(main.app) as client:
+        response = submit(client, path="/align")
+        assert response.status_code == code
+        assert str(error) in response.json()["error"]
+        if code == 422:
+            assert response.json()["supported"] == ["en", "de"]
+        assert list(main.root.iterdir()) == []
+        monkeypatch.setattr(main.aligner, "align", lambda *args: fake_result())
+        assert submit(client, path="/align").status_code == 200
+
+
+def test_synchronous_validation_and_auth(make_app, monkeypatch):
+    main = make_app(auth_token="secret", max_upload_mb=1)
+    monkeypatch.setattr(main.aligner, "align", lambda *args: fake_result())
+    headers = {"Authorization": "Bearer secret"}
+    with TestClient(main.app) as client:
+        assert submit(client, path="/align").status_code == 401
+        for params, audio, code in [
+            ("[]", b"x", 400),
+            ('{"text":"hi"}', b"", 400),
+            ('{"text":"hi"}', b"x" * (1024**2 + 1), 413),
+        ]:
+            assert (
+                submit(
+                    client, path="/align", params=params, audio=audio, headers=headers
+                ).status_code
+                == code
+            )
+        assert submit(client, path="/align", headers=headers).status_code == 200
+        assert list(main.root.iterdir()) == []
+
+
+def test_sync_and_async_share_serial_worker(make_app, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    main = make_app(max_pending_jobs=1)
+    entered, release = Event(), Event()
+
+    def fake(*args):
+        entered.set()
+        assert release.wait(3)
+        return fake_result()
+
+    monkeypatch.setattr(main.aligner, "align", fake)
+    with TestClient(main.app) as client, ThreadPoolExecutor() as caller:
+        pending = caller.submit(submit, client, path="/align")
+        try:
+            assert entered.wait(2)
+            assert not pending.done()
+            assert client.get("/health").status_code == 200
+            assert submit(client).status_code == 503
+            assert submit(client, path="/align").status_code == 503
+        finally:
+            release.set()
+        assert pending.result(timeout=3).status_code == 200
+        job_id = submit(client).json()["job_id"]
+        assert wait_job(client, job_id)["state"] == "succeeded"
+
+
+def test_cancelled_sync_wait_keeps_slot_until_worker_cleans_up(make_app, monkeypatch):
+    import asyncio
+    from io import BytesIO
+
+    from fastapi import UploadFile
+
+    main = make_app(max_pending_jobs=1)
+    entered, release = Event(), Event()
+
+    def fake(*args):
+        entered.set()
+        assert release.wait(3)
+        return fake_result()
+
+    monkeypatch.setattr(main.aligner, "align", fake)
+
+    async def exercise():
+        async with main.lifespan(main.app):
+            request = asyncio.create_task(
+                main.enqueue(
+                    UploadFile(file=BytesIO(b"audio"), filename="v.wav"),
+                    '{"text":"hello"}',
+                    None,
+                    synchronous=True,
+                )
+            )
+            try:
+                assert await asyncio.to_thread(entered.wait, 2)
+                request.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await request
+                assert not main.slots.acquire(blocking=False)
+                assert len(list(main.root.iterdir())) == 1
+            finally:
+                release.set()
+        assert list(main.root.iterdir()) == []
+        assert main.slots.acquire(blocking=False)
+        main.slots.release()
+
+    asyncio.run(exercise())

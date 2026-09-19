@@ -33,7 +33,9 @@ the fix on top and say what it fixes. Once it's in, it stays in.
   **PyTorch** underneath. These are the real dependencies and they justify
   themselves — the whole job is running a wav2vec2 model on a GPU.
 - **ASS job contract.** `/v1/align`, job polling, artifact downloads, `/health`
-  and `/v1/info`. The synchronous `/align` and `/models` routes were removed.
+  and `/v1/info`. Synchronous `/align` is restored for standalone callers;
+  it shares the job worker and limits, but returns JSON directly and cleans up
+  its scratch files. `/models` remains replaced by `/v1/info`.
   Use one serial inference worker and one resident language model. ASS stops
   the container for eviction; no park/unpark endpoints yet.
 - **Multipart in, asynchronous jobs out.** Save timings as `alignment.json`;

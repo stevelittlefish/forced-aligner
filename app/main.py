@@ -17,7 +17,7 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadF
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import config
-from .align import Aligner
+from .align import Aligner, AudioDecodeError, LanguageUnsupported, supported_languages
 
 log = logging.getLogger("forced-aligner")
 cfg = config.load()
@@ -64,6 +64,36 @@ def run_job(directory: Path, text: str, language: str) -> None:
             slots.release()
 
 
+def run_synchronous(directory: Path, text: str, language: str) -> JSONResponse:
+    # The shared worker owns cleanup even if the caller gives up waiting.
+    try:
+        try:
+            result = aligner.align(str(directory / "input.audio"), text, language)
+        except LanguageUnsupported as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": f"unsupported language {language!r}: {exc}",
+                    "supported": supported_languages(),
+                },
+            ) from exc
+        except AudioDecodeError as exc:
+            raise HTTPException(
+                status_code=415, detail=f"audio could not be decoded: {exc}"
+            ) from exc
+        except Exception as exc:
+            log.exception("synchronous alignment failed")
+            raise HTTPException(
+                status_code=500, detail=f"alignment failed: {exc}"
+            ) from exc
+        body = asdict(result)
+        body["duration"] = round(result.duration, 3)
+        return JSONResponse(body)
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+        slots.release()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     root.mkdir(parents=True, exist_ok=True)
@@ -90,7 +120,8 @@ app = FastAPI(title="forced-aligner", version="0.2.0", lifespan=lifespan)
 
 @app.exception_handler(HTTPException)
 async def http_error(_: Request, exc: HTTPException) -> JSONResponse:
-    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+    body = exc.detail if isinstance(exc.detail, dict) else {"error": exc.detail}
+    return JSONResponse(status_code=exc.status_code, content=body)
 
 
 def check_auth(authorization: str | None) -> None:
@@ -136,6 +167,25 @@ async def submit(
     params: str = Form(...),
     authorization: str | None = Header(default=None),
 ) -> dict:
+    return await enqueue(audio, params, authorization)
+
+
+@app.post("/align")
+async def align_synchronously(
+    audio: UploadFile = File(...),
+    params: str = Form(...),
+    authorization: str | None = Header(default=None),
+) -> JSONResponse:
+    return await enqueue(audio, params, authorization, synchronous=True)
+
+
+async def enqueue(
+    audio: UploadFile,
+    params: str,
+    authorization: str | None,
+    *,
+    synchronous: bool = False,
+) -> dict | JSONResponse:
     check_auth(authorization)
     try:
         p = json.loads(params)
@@ -167,9 +217,25 @@ async def submit(
         if not size:
             raise HTTPException(status_code=400, detail="audio file is empty")
         status = {"job_id": directory.name, "state": "queued", "artifacts": []}
-        save_status(directory, status)
-        app.state.worker.submit(run_job, directory, text.strip(), language.strip())
+        if not synchronous:
+            save_status(directory, status)
+        future = app.state.worker.submit(
+            run_synchronous if synchronous else run_job,
+            directory,
+            text.strip(),
+            language.strip(),
+        )
         submitted = True
+        if synchronous:
+            # Cancellation must not cancel queued work and strand its upload or
+            # slot. The worker finishes and cleans up even after disconnection.
+            pending = asyncio.wrap_future(future)
+            try:
+                return await asyncio.shield(pending)
+            except asyncio.CancelledError:
+                # Consume a later failure when nobody is left to receive it.
+                pending.add_done_callback(lambda done: done.exception())
+                raise
         return status
     finally:
         if not submitted:

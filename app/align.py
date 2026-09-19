@@ -28,6 +28,22 @@ class AudioDecodeError(Exception):
     distinguish bad input from a model load or inference failure."""
 
 
+def supported_languages() -> list[str]:
+    """Language codes WhisperX has a default wav2vec2 model for. Used to fill the
+    422 response body so a caller that sent a bad code learns what *is* possible
+    without reading our source. Imported lazily; falls back to [] if the map
+    isn't reachable (old WhisperX), which is honest rather than a lie."""
+    try:
+        from whisperx import alignment as _a
+
+        codes = set()
+        for name in ("DEFAULT_ALIGN_MODELS_TORCH", "DEFAULT_ALIGN_MODELS_HF"):
+            codes.update(getattr(_a, name, {}).keys())
+        return sorted(codes)
+    except Exception:
+        return []
+
+
 @dataclass
 class Word:
     text: str
