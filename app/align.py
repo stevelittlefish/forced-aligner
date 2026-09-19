@@ -230,7 +230,14 @@ class Aligner:
     def _release_vram(self) -> None:
         """Return the caching allocator's free blocks to the CUDA driver so other
         processes on the shared GPU can use them. A no-op off CUDA. empty_cache()
-        only releases already-freed cache, so the del above must happen first."""
+        only releases already-freed cache, so the del above must happen first.
+
+        This is only half the fix: empty_cache() can't hand back a reserved
+        segment that's still fragmented, which is exactly what a long song's
+        multi-GB wav2vec2 spike leaves behind. The image sets
+        PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True (see the Dockerfile) so
+        those segments are actually returned here instead of hoarded until the
+        next job reuses them."""
         if not str(self.cfg.device).startswith("cuda"):
             return
         import gc

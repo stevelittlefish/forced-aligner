@@ -37,7 +37,15 @@ RUN python -m pip install -r requirements.txt
 # bind mount can override them; the library cache env is infrastructure only.
 COPY app/ ./app/
 COPY config.example.toml ./config.toml
-ENV HF_HOME=/cache/aligner/huggingface \
+# expandable_segments makes torch's caching allocator hand freed VRAM back to
+# the driver instead of hoarding fragmented reserved segments. A long song
+# spikes wav2vec2's attention into several GB of transient allocation; without
+# this the reserved pool stays fat after the job and empty_cache() can't fully
+# release it, so the shared GPU's co-tenants (Demucs, Stable Audio) never see
+# the memory come back. Same class of env as the cache paths below: library
+# wiring, not app config.
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    HF_HOME=/cache/aligner/huggingface \
     TORCH_HOME=/cache/aligner/torch \
     HF_TOKEN_PATH=/cache/hf-token
 RUN mkdir -p /cache/aligner /app/outputs
