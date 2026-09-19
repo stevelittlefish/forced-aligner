@@ -12,3 +12,6 @@ venv/
 # Model cache / scratch audio if placed in-tree
 models/
 *.wav
+
+# Job scratch / artifacts
+outputs/

@@ -21,15 +21,22 @@ compute_type = "float16"
 # normally send it; this is only the fallback.
 default_language = "en"
 
-# Where Hugging Face caches downloaded models. Persist this across container
-# restarts so models download once. Empty = HF default (~/.cache/huggingface).
-model_cache_dir = ""
+# WhisperX model downloads live under this service's private cache directory.
+# Mount /srv/ass/cache:/cache. HF/torch caches are also set in the image.
+model_cache_dir = "/cache/aligner/models"
 
 # Trim silence/instrumental lead-in before aligning. Almost always wanted.
 vad_trim = true
 
-# Languages to load at startup and keep resident, so the first /align isn't slow
-# (it otherwise pays the model download + load on first use). Defaults to ["en"].
-# Set to [] to load everything lazily on first request instead. Note: startup
-# blocks until these are loaded, so the container is "starting" until they're in.
+# Preload English before readiness. Only ONE language model stays resident;
+# requesting another unloads the previous one. Use [] for lazy loading. A preload
+# failure fails startup, so ASS will not send jobs to a broken backend.
 preload_languages = ["en"]
+
+[jobs]
+# ASS harvests results before eviction. No output mount is needed: this scratch
+# directory disappears when ASS removes the container. No automatic expiry can
+# race ASS's artifact download. For standalone use, clean it after consumption.
+directory = "/app/outputs"
+max_pending_jobs = 8  # running + queued + uploads being accepted
+max_upload_mb = 512  # copied in chunks; rejects larger files with HTTP 413

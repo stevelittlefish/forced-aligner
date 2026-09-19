@@ -33,22 +33,17 @@ RUN python -m pip install torch --index-url https://download.pytorch.org/whl/cu1
 COPY requirements.txt .
 RUN python -m pip install -r requirements.txt
 
+# Configuration defaults make this image directly runnable by ASS. A TOML
+# bind mount can override them; the library cache env is infrastructure only.
 COPY app/ ./app/
-COPY config.example.toml .
+COPY config.example.toml ./config.toml
+ENV HF_HOME=/cache/aligner/huggingface \
+    TORCH_HOME=/cache/aligner/torch \
+    HF_TOKEN_PATH=/cache/hf-token
+RUN mkdir -p /cache/aligner /app/outputs
 
-# HF cache lives here; mount a volume at /models and point
-# [align].model_cache_dir at it so models download once (see docs/deploy.md).
-ENV HF_HOME=/models
-RUN mkdir -p /models
-
-# config.toml is provided at run time (mount or copy in). The app reads host/port
-# from it, but the process must bind the same port this image exposes: 8830. Keep
-# [server].port = 8830 in the mounted config, or override the CMD.
 EXPOSE 8830
-
-# Fails the container's health status if the app isn't serving. --start-period
-# gives uvicorn + first model import time to come up.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
     CMD curl -fsS http://localhost:8830/health || exit 1
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8830"]

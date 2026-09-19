@@ -24,25 +24,8 @@ class LanguageUnsupported(Exception):
 class AudioDecodeError(Exception):
     """The uploaded bytes could not be decoded as audio (bad/unsupported file).
 
-    Separate from a model/alignment failure so the HTTP layer can answer 415
-    (unsupported media) rather than 500 — the spec distinguishes them because a
-    bad upload is the caller's problem, not the service's."""
-
-
-def supported_languages() -> list[str]:
-    """Language codes WhisperX has a default wav2vec2 model for. Used to fill the
-    422 response body so a caller that sent a bad code learns what *is* possible
-    without reading our source. Imported lazily; falls back to [] if the map
-    isn't reachable (old WhisperX), which is honest rather than a lie."""
-    try:
-        from whisperx import alignment as _a
-
-        codes = set()
-        for name in ("DEFAULT_ALIGN_MODELS_TORCH", "DEFAULT_ALIGN_MODELS_HF"):
-            codes.update(getattr(_a, name, {}).keys())
-        return sorted(codes)
-    except Exception:
-        return []
+    The job worker records the decode error as a failed job, so the caller can
+    distinguish bad input from a model load or inference failure."""
 
 
 @dataclass
@@ -70,7 +53,7 @@ class AlignResult:
 class Aligner:
     """Holds the per-language wav2vec2 model cache. One instance per process.
 
-    Models load lazily on first use for a language and stay resident. Loading is
+    Only the most recently requested language stays resident. Loading is
     guarded by a lock because a GPU model load is not something to run twice
     concurrently for the same language.
     """
@@ -81,10 +64,11 @@ class Aligner:
         self._lock = Lock()
 
     def loaded_languages(self) -> list[str]:
-        return sorted(self._models.keys())
+        with self._lock:
+            return sorted(self._models.keys())
 
     def preload(self, language: str) -> None:
-        """Load a language's model now and keep it resident, so the first /align
+        """Load a language's model now and keep it resident, so the first job
         for it isn't slow. Just warms the same cache _get_model uses; raises
         LanguageUnsupported if no model maps to the code."""
         self._get_model(language)
@@ -92,6 +76,10 @@ class Aligner:
     def _get_model(self, language: str):
         with self._lock:
             if language not in self._models:
+                # One language resident: a multilingual request history must not
+                # quietly turn the ASS reservation into a work of fiction.
+                self._models.clear()
+                self._release_vram()
                 import whisperx  # heavy; imported on first real use
 
                 try:
@@ -149,9 +137,27 @@ class Aligner:
             # OOM'd on a full card. Drop this job's big tensors and hand the
             # cache back to the driver, where the co-tenants can claim it. The
             # per-language model cache (self._models) is untouched — only the
-            # audio and alignment tensors go, so the next /align is still warm.
+            # audio and alignment tensors go, so the next job is still warm.
             del audio, segments, result
             self._release_vram()
+
+    def vram_stats(self) -> dict:
+        stats = {
+            "cuda": False, "device": str(self.cfg.device),
+            "allocated_mb": 0, "reserved_mb": 0, "peak_mb": 0,
+        }
+        if str(self.cfg.device).startswith("cuda"):
+            import torch
+
+            if torch.cuda.is_available():
+                device = self.cfg.device
+                stats.update(
+                    cuda=True,
+                    allocated_mb=int(torch.cuda.memory_allocated(device) / 1024**2),
+                    reserved_mb=int(torch.cuda.memory_reserved(device) / 1024**2),
+                    peak_mb=int(torch.cuda.max_memory_allocated(device) / 1024**2),
+                )
+        return stats
 
     def _release_vram(self) -> None:
         """Return the caching allocator's free blocks to the CUDA driver so other

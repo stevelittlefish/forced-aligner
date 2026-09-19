@@ -46,8 +46,9 @@ downloads the right one on first use and caches it to disk. There is a
 **different model per language**; a language with no mapped model can't be
 aligned (the service returns `422`).
 
-Loading a model takes seconds and is done lazily, once per language, then kept
-resident. `/health` and `/models` report which are warm.
+Models load on demand, with English preloaded by default before readiness.
+Only one language model stays resident; switching languages unloads the previous
+one. `/v1/info` reports the loaded language. Downloaded weights remain cached.
 
 ## Where it breaks — and why the spike matters
 

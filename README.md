@@ -1,78 +1,48 @@
 # forced-aligner
 
-A small LAN HTTP service that answers one question:
+An ASS backend that aligns known lyrics to a vocal audio clip using WhisperX's
+wav2vec2 alignment engine. It returns word and line timings, not a transcription.
+Unresolved words keep `null` timestamps so callers can flag them for correction.
 
-> **Given a vocal audio clip and the exact words sung in it, when is each word
-> sung?**
+## ASS API
 
-Text + audio in, word-level timestamps out. It does **forced alignment**: it
-forces known lyrics onto audio and finds the timing. It does *not* transcribe —
-it never guesses the words, it only times the ones you give it. Forcing known
-text is far more robust than transcribing singing, which is why this is a
-separate, focused service.
+- `GET /health` — readiness; configured preloads finish before serving.
+- `GET /v1/info` — model, loaded language, capabilities, and VRAM telemetry.
+- `POST /v1/align` — multipart `audio` and `params` JSON (`text`, optional
+  `language`); returns HTTP 202 with `{job_id, state: "queued", artifacts: []}`.
+- `GET /v1/jobs/{id}` — queued/running/succeeded/failed, error and artifacts.
+- `GET /v1/jobs/{id}/result/alignment.json` — the completed timing document.
 
-Built for [the sing thing](https://github.com/stevelittlefish/the_sing_thing)
-(LAN karaoke), but it is generic: nothing here is karaoke-specific. It's one
-more GPU service on the AI server, alongside Demucs, Whisper and the rest, called
-over HTTP.
+The old synchronous `/align` and `/models` endpoints have been removed. Clients
+should submit to ASS at `/v1/aligner/jobs`, poll `/v1/jobs/{id}`, and download
+`/v1/jobs/{id}/result/alignment.json`. See [the contract](docs/spec.md).
 
-## What it does, in one breath
+## Residency and jobs
 
-1. Load a vocal stem (WAV) and the known lyric text.
-2. A **wav2vec2 CTC acoustic model** (per language, from Hugging Face) emits a
-   character-probability distribution per ~20 ms audio frame.
-3. A CTC/Viterbi pass finds the single best *monotonic* alignment of the known
-   characters to those frames.
-4. Character timings group into words; words map back onto the input lines.
-5. Return line- and word-level start/end times.
+One serial inference worker keeps HTTP responsive and prevents overlapping GPU
+jobs. Only one language model is resident: switching languages unloads the old
+model before loading the new one. Disk caches retain downloaded weights.
 
-The alignment engine is [WhisperX](https://github.com/m-bain/whisperX) — note
-**Whisper itself does no aligning here**; WhisperX's alignment step is a wav2vec2
-model plus the CTC trellis. See [docs/spec.md](docs/spec.md) for the details and
-[docs/alignment.md](docs/alignment.md) for how the algorithm works.
+ASS uses `evict = "stop"`; there are no park/unpark endpoints. ASS harvests the
+JSON before removing the container. Jobs and artifacts live in the container's
+scratch directory, with uploads removed after completion or failure. A process
+restart marks interrupted jobs failed; completed results survive while their
+scratch directory exists. There is no result expiry that could race harvesting.
 
-## Where the model comes from
+## Development
 
-Nothing to train or manage. WhisperX ships a language-code → wav2vec2-model map
-and **downloads the right model from Hugging Face on first use**, then caches it
-on disk. That download is the only time this service touches the internet; after
-that it runs fully local on the LAN.
-
-## API
-
-One real endpoint. Multipart, mirroring how Demucs is called on this LAN.
-
-```
-POST /align       multipart: `audio` (WAV) + `params` JSON {text, language?}
-                  -> { language, lines:[ {start,end,text, words:[{text,start,end}]} ] }
-GET  /health      -> { status, device, models_loaded }
-GET  /models      -> loaded/available alignment models
-```
-
-Full contract in [docs/spec.md](docs/spec.md).
-
-## Quick start (dev)
-
-Needs Python 3.11+ and, for real speed, a CUDA GPU. CPU works for smoke tests.
+Python 3.11+. The HTTP tests mock alignment and need no GPU or torch:
 
 ```sh
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
-cp config.example.toml config.toml     # edit device/port if needed
-./run.sh                               # uvicorn on the configured port
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements-dev.txt
+ruff check . && python -m compileall app && pytest -q
 ```
 
-Smoke test:
+For actual alignment, install `requirements.txt`, copy `config.example.toml` to
+`config.toml`, and adjust the device and writable cache/job paths. `./run.sh`
+reads the host/port from that TOML file. Models download on first use.
 
-```sh
-curl -s http://localhost:8830/health | jq
-curl -s -F 'audio=@vocals.wav' \
-     -F 'params={"text":"Hello darkness my old friend","language":"en"}' \
-     http://localhost:8830/align | jq
-```
-
-## Deploy
-
-One container on the AI server. See the [Dockerfile](Dockerfile) (CUDA base) and
-[docs/deploy.md](docs/deploy.md). Configuration is a `config.toml` — **no
-environment variables**.
+See [deployment](docs/deploy.md) for image release and ASS configuration, and
+[alignment notes](docs/alignment.md) for the algorithm's limits with singing.

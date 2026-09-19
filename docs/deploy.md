@@ -1,89 +1,63 @@
-# Deploying on the AI server
+# Deploy through ASS
 
-One container, GPU-backed. Same neighbourhood as Demucs and Whisper.
+The image defaults to CUDA on port 8830, English preloading, one resident
+language model, and stop eviction. Application settings are TOML; the image
+sets HF_HOME, TORCH_HOME and HF_TOKEN_PATH only for third-party cache wiring.
+No custom config mount is required. Override `/app/config.toml` if needed.
 
-## torch and CUDA
-
-The one fiddly part. `torch` must match the host's CUDA. The Dockerfile installs
-the `cu121` wheel against a `cuda:12.1.1` base — **change both together** if the
-host driver differs. `whisperx` and its wav2vec2 stack sit on top of that torch.
-
-Verify inside the container:
+## Build and release
 
 ```sh
-python3 -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
+docker build -t ghcr.io/stevelittlefish/forced-aligner:latest .
+# Or publish through the tag-triggered GitHub Actions container workflow:
+./make_release.sh v0.2.0 "ASS job API and bounded language residency"
 ```
 
-`False` means the torch wheel and the base image (or the host driver) disagree.
+The workflow builds linux/amd64 and publishes `latest` plus version tags to
+GHCR. Make the GHCR package accessible to the server before pulling. The
+Dockerfile retains the existing CUDA 12.1 / Python 3.11 base and dependency
+installation; building and real GPU inference must be verified on the server.
 
-## Config
+## ASS registration
 
-No environment variables — mount a `config.toml`:
+The ASS repository's `ass.toml` contains `[services.aligner]` with `verb = "align"`,
+port 8830, and the image above. It mounts `/srv/ass/cache:/cache`:
 
-```sh
-cp config.example.toml config.toml   # then edit device/port/auth
-```
+- WhisperX downloads: `/cache/aligner/models`.
+- HF cache: `/cache/aligner/huggingface`.
+- torch cache: `/cache/aligner/torch`.
+- Shared HF token file: `/cache/hf-token`, if needed.
 
-Set `[align].device = "cuda"` and `compute_type = "float16"` on the server.
+The scratch results live at `/app/outputs` without a host mount. ASS downloads
+all artifacts before removing the container. Do not run the standalone compose
+service alongside ASS; ASS owns the container and GPU scheduling.
 
-## Model cache
+Initial **unmeasured** reservations are 12,000 MiB pinned VRAM and 6,000 MiB RAM,
+with stop eviction (zero parked reservation). The VRAM estimate allows headroom
+over a historical roughly 9.9 GB reserved-memory observation on a ten-minute
+track. It is not a guarantee for arbitrarily long audio or every language.
+The RAM estimate covers model loading, decoded audio and alignment scratch;
+measure and adjust both on representative tracks. Only one language is cached.
 
-Models download from Hugging Face on first use (per language) and are cached.
-Persist that cache across restarts or every restart re-downloads:
+## Server acceptance
 
-- set `[align].model_cache_dir = "/models"` in config, and
-- mount a volume at `/models`.
+1. Release/build the image, then run ASS's `./pull-services.sh` on the GPU host.
+2. Submit a short vocal WAV with known lyrics through ASS:
 
-## Run
+   ```sh
+   curl -s -F 'audio=@vocals.wav' \
+     -F 'params={"text":"Hello world","language":"en"}' \
+     http://localhost:2645/v1/aligner/jobs
+   ```
 
-The base image is `nvidia/cuda:...ubuntu22.04`. Ubuntu 22.04 ships Python 3.10,
-so the Dockerfile pulls **3.11 from the deadsnakes PPA** (we need 3.11+ for
-stdlib `tomllib`) and points `python`/`pip` at it — don't "simplify" that back to
-`apt-get install python3.11`, which fails on jammy.
+3. Poll `/v1/jobs/{id}`, download `/v1/jobs/{id}/result/alignment.json`, and check
+   the timings, language, duration and unresolved words.
+4. Run a long track and switch language. Inspect `/v1/backends/aligner/info`
+   and measure driver VRAM and process RAM to replace the estimated reservations.
+5. Force eviction by running another large backend. The old alignment result
+   must still download from ASS. Run alignment again and confirm caches prevent
+   another weight download.
 
-Host state lives under `/srv/forced-aligner` — the config bind-mount and the
-model cache both come from there. Create it once and drop the config in:
-
-```sh
-sudo mkdir -p /srv/forced-aligner/models
-sudo cp config.example.toml /srv/forced-aligner/config.toml   # then edit it
-```
-
-Easiest is compose (GPU reservation, mounts and port are all wired in it):
-
-```sh
-docker compose up -d --build
-docker compose logs -f                # first /align downloads the model (slow)
-```
-
-Or the raw equivalent:
-
-```sh
-docker build -t forced-aligner .
-docker run --gpus '"device=0"' \
-  -p 8830:8830 \
-  -v /srv/forced-aligner/config.toml:/app/config.toml:ro \
-  -v /srv/forced-aligner/models:/models \
-  forced-aligner
-```
-
-The image `EXPOSE`s and the published port is **8830**; the app binds whatever
-`[server].port` says in the mounted `config.toml`. Keep them equal (or change
-both) or the container will listen on a port nothing is mapped to. The image has
-a `HEALTHCHECK` hitting `/health`, so `docker ps` shows healthy/unhealthy once
-it's up.
-
-Then from another LAN host:
-
-```sh
-curl -s http://<host>:8830/health | jq
-```
-
-The first `/align` for a given language is slow (model download + load); after
-that the model is warm. `/models` shows what's loaded.
-
-## Placing it in SERVERS.md
-
-Once it's up, add it to the sing thing's `SERVERS.md` with its real endpoint and
-the `/align` contract, so the karaoke app knows where to find it. The client
-shape is the same submit-multipart pattern used for Demucs.
+For standalone debugging, `docker compose up --build` uses the same cache
+mount. Remove it before letting ASS manage the service. The image's uvicorn CMD
+binds port 8830; changing ports requires overriding CMD as well as ASS config.

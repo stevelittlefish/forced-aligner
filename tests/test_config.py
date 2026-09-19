@@ -48,3 +48,23 @@ def test_preload_can_be_disabled(tmp_path):
     p = tmp_path / "config.toml"
     p.write_text("[align]\npreload_languages = []\n")
     assert config.load(p).preload_languages == ()
+
+
+@pytest.mark.parametrize("key", ["max_pending_jobs", "max_upload_mb"])
+def test_job_limits_must_be_positive(tmp_path, key):
+    path = tmp_path / "config.toml"
+    path.write_text(f"[jobs]\n{key} = 0\n")
+    with pytest.raises(ValueError, match=key):
+        config.load(path)
+
+
+def test_job_settings(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[jobs]\ndirectory = "/tmp/jobs"\n'
+        'max_pending_jobs = 2\nmax_upload_mb = 128\n'
+    )
+    cfg = config.load(path)
+    assert (cfg.jobs_dir, cfg.max_pending_jobs, cfg.max_upload_mb) == (
+        "/tmp/jobs", 2, 128,
+    )

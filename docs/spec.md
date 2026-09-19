@@ -1,95 +1,46 @@
-# API specification
+# ASS backend contract
 
-One service, multipart in / JSON out, matching the LAN convention (Demucs is
-called the same way). Base URL is `http://<host>:<port>` from `config.toml`.
+`POST /v1/align` accepts multipart:
 
-## `POST /align`
+- `audio`: audio bytes supported by ffmpeg (typically the vocal WAV).
+- `params`: a JSON object with nonempty `text` and optional nonempty `language`
+  (defaults to the configured language, `en` in the image).
 
-Align known lyric text to a vocal audio clip.
-
-**Request** — `multipart/form-data`:
-
-| part | type | required | notes |
-|---|---|---|---|
-| `audio` | file (WAV) | yes | The vocal stem. Mono or stereo; any sample rate (resampled internally to 16 kHz for the model). |
-| `params` | JSON string | yes | See below. |
-
-`params` fields:
-
-| field | type | required | notes |
-|---|---|---|---|
-| `text` | string | yes | The lyrics. **Newlines are line breaks** — the response preserves this line structure. Blank lines are ignored. |
-| `language` | string | no | ISO code (`en`, `de`, `ja`, …). Selects the wav2vec2 model. If omitted, falls back to `default_language` from config. See the auto-detect note below. |
-
-**Response** — `200`, JSON:
+After validating and saving the upload, return HTTP 202:
 
 ```json
-{
-  "language": "en",
-  "duration": 184.2,
-  "lines": [
-    {
-      "start": 12.42,
-      "end": 16.81,
-      "text": "Hello darkness my old friend",
-      "words": [
-        {"text": "Hello",    "start": 12.42, "end": 12.91},
-        {"text": "darkness",  "start": 13.05, "end": 13.74},
-        {"text": "my",        "start": 14.18, "end": 14.39},
-        {"text": "old",       "start": 14.43, "end": 14.79},
-        {"text": "friend",    "start": 14.82, "end": 16.81}
-      ]
-    }
-  ]
-}
+{"job_id":"<32 hex characters>","state":"queued","artifacts":[]}
 ```
 
-This is deliberately the same shape as the sing thing's internal lyric
-representation, so the Go side stores it almost as-is.
-
-### Unresolved timing
-
-A word the aligner could not place gets `"start": null, "end": null` rather than
-a guessed value. This happens on sustained notes, screams, ad-libs not in the
-text, and mismatched lyrics. A line whose words are all null gets null
-start/end. **Nulls are the honest signal that a caller should fall back to
-line-level timing or flag the song** — never invent a timestamp to avoid one.
-
-### Errors
-
-| status | when | body |
-|---|---|---|
-| `400` | missing/unparseable `params`, empty `text`, no `audio` | `{"error": "..."}` |
-| `415` | `audio` not decodable as audio | `{"error": "..."}` |
-| `422` | unsupported `language` (no wav2vec2 model maps to it) | `{"error": "...", "supported": [...]}` |
-| `500` | model load or alignment failure | `{"error": "..."}` |
-
-### The auto-detect caveat
-
-Language detection normally comes from a *transcription* pass. This service does
-not transcribe, so it cannot truly detect language from audio alone. If
-`language` is omitted it uses `default_language`. The caller (the sing thing)
-usually knows the language from track metadata or the LRCLIB result, so it should
-send it. Documented so nobody expects magic here.
-
-## `GET /health`
+One worker transitions each job through `queued` → `running` → `succeeded` or
+`failed`. Poll `GET /v1/jobs/{job_id}`. On success the response includes:
 
 ```json
-{ "status": "ok", "device": "cuda", "models_loaded": ["en", "de"] }
+{"job_id":"<id>","state":"succeeded","artifacts":[{"name":"alignment.json","kind":"metadata","content_type":"application/json","bytes":1234}]}
 ```
 
-`status` is `ok` once the app is up. `models_loaded` is the languages whose
-wav2vec2 model is currently resident in memory (loaded lazily on first use).
+The byte count is the actual file size. Download it from
+`GET /v1/jobs/{job_id}/result/alignment.json`. The document contains `language`,
+`duration` (seconds), and `lines`, each with `text`, `start`, `end`, and `words`.
+Words contain `text`, `start`, and `end`; unresolved timings remain JSON `null`.
 
-## `GET /models`
+Malformed parameters or empty audio return 400; missing multipart fields return
+422; oversized audio returns 413; a full queue returns 503. An accepted job that
+cannot decode audio, load a language model, or complete inference becomes
+`failed` with an `error` string and empty `artifacts`. Unknown jobs/artifacts
+return 404; downloading before success returns 409.
 
-```json
-{
-  "device": "cuda",
-  "loaded": ["en"],
-  "default_language": "en"
-}
-```
+`GET /health` is ready after configured preloads finish. A preload failure
+aborts startup. `GET /v1/info` reports the loaded language, default language,
+`max_loaded_languages: 1`, `capabilities: ["align"]`, `eviction: "stop"`, and
+`vram: {cuda, device, allocated_mb, reserved_mb, peak_mb}`. Memory values are
+MiB; peak is PyTorch's process-lifetime peak allocated memory, not total driver
+memory. CPU reports zeros without importing torch.
 
-Introspection for debugging which models are warm. Loading is lazy and
-per-language; the first request for a new language pays the load cost (seconds).
+If `server.auth_token` is set, submission, polling and artifact download require
+its Bearer token. Leave it empty for ASS: ASS does not forward backend auth.
+Health and info are unauthenticated LAN diagnostics.
+
+The synchronous `/align` and `/models` routes are removed. No park/unpark routes
+are provided; configure stop eviction. Run one uvicorn process (no `--workers`):
+the worker queue and concurrency limit belong to that process.

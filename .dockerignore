@@ -11,7 +11,7 @@ __pycache__/
 .pytest_cache/
 
 # Local, host-specific, or secret-ish — never bake into the image. config.toml is
-# mounted at run time (it may hold an auth_token); the example is copied instead.
+# optionally mounted at run time (it may hold an auth_token); bake the example.
 config.toml
 models/
 *.wav
@@ -22,3 +22,6 @@ docs/
 requirements-dev.txt
 *.md
 LICENSE
+
+# Backend job scratch is not image content.
+outputs/

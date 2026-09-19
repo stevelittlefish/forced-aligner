@@ -45,8 +45,9 @@ def _fresh_main(monkeypatch, cfg: _config.Config):
 
 
 @pytest.fixture
-def make_app(monkeypatch):
+def make_app(monkeypatch, tmp_path):
     def _make(**cfg_over):
+        cfg_over.setdefault("jobs_dir", str(tmp_path / "jobs"))
         return _fresh_main(monkeypatch, _cfg(**cfg_over))
 
     return _make

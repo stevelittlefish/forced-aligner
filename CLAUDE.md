@@ -15,6 +15,9 @@ you commit.** No branches, no PRs, no waiting to be asked. Finish a coherent
 chunk, run the checks, commit with a message explaining *why*, `git push`, move
 on. The push is the YOLO — it is not optional.
 
+Append a Claude Code-style co-author trailer for the model in use, e.g.
+`Co-authored-by: GPT 6 Astra <noreply@openai.com>` for that Codex model.
+
 Corrections are follow-up commits, not history rewrites: got it wrong, commit
 the fix on top and say what it fixes. Once it's in, it stays in.
 
@@ -29,11 +32,15 @@ the fix on top and say what it fixes. Once it's in, it stays in.
 - **FastAPI + uvicorn** for the HTTP surface. **WhisperX** for alignment;
   **PyTorch** underneath. These are the real dependencies and they justify
   themselves — the whole job is running a wav2vec2 model on a GPU.
-- **Keep the surface tiny.** One real endpoint (`/align`) plus `/health` and
-  `/models`. Resist growing this into a general ML gateway; if a second job
-  (transcription, stems) is wanted, it's a different service.
-- **Multipart in, JSON out**, mirroring how Demucs is called on this LAN, so the
-  Go client shape is familiar.
+- **ASS job contract.** `/v1/align`, job polling, artifact downloads, `/health`
+  and `/v1/info`. The synchronous `/align` and `/models` routes were removed.
+  Use one serial inference worker and one resident language model. ASS stops
+  the container for eviction; no park/unpark endpoints yet.
+- **Multipart in, asynchronous jobs out.** Save timings as `alignment.json`;
+  ASS harvests it before removing the container. No automatic result expiry.
+- The image supplies TOML defaults. HF/torch cache environment variables are
+  allowed as library wiring; all paths are under `/cache/aligner`, with the
+  shared token at `/cache/hf-token`.
 
 ## Layout
 

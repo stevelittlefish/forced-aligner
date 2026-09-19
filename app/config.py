@@ -23,8 +23,11 @@ class Config:
     model_cache_dir: str
     vad_trim: bool
     # Languages to load at startup instead of lazily on first request, so the
-    # first /align isn't slow. A tuple because Config is frozen/hashable.
+    # first job isn't slow. A tuple because Config is frozen/hashable.
     preload_languages: tuple[str, ...]
+    jobs_dir: str = "outputs"
+    max_pending_jobs: int = 8
+    max_upload_mb: int = 512
 
 
 def load(path: Path | None = None) -> Config:
@@ -48,6 +51,10 @@ def load(path: Path | None = None) -> Config:
 
     server = raw.get("server", {})
     align = raw.get("align", {})
+    jobs = raw.get("jobs", {})
+    for key, default in (("max_pending_jobs", 8), ("max_upload_mb", 512)):
+        if not isinstance(jobs.get(key, default), int) or jobs.get(key, default) < 1:
+            raise ValueError(f"jobs.{key} must be a positive integer")
     return Config(
         host=server.get("host", "0.0.0.0"),
         port=int(server.get("port", 8830)),
@@ -58,4 +65,7 @@ def load(path: Path | None = None) -> Config:
         model_cache_dir=align.get("model_cache_dir", ""),
         vad_trim=bool(align.get("vad_trim", True)),
         preload_languages=tuple(align.get("preload_languages", ["en"])),
+        jobs_dir=jobs.get("directory", "outputs"),
+        max_pending_jobs=jobs.get("max_pending_jobs", 8),
+        max_upload_mb=jobs.get("max_upload_mb", 512),
     )
